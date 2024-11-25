@@ -2,7 +2,6 @@ import json
 import subprocess
 import logging
 import argparse
-import csv
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -16,11 +15,17 @@ def run_oc_command(command: list) -> str:
         logging.error(f"Error running command {command}: {e}")
         return None
 
-# Fetch build configs from the project
-def get_build_configs(project_name: str):
-    logging.info(f"Fetching build configs for project {project_name}")
-    output = run_oc_command(["oc", "get", "bc", "-n", project_name, "-o", "json"])
+# Fetch a single build config
+def get_build_config(project_name: str, build_config_name: str):
+    logging.info(f"Fetching BuildConfig '{build_config_name}' in project '{project_name}'")
+    output = run_oc_command(["oc", "get", "bc", build_config_name, "-n", project_name, "-o", "json"])
     return json.loads(output) if output else None
+
+# Fetch all build configs in a namespace
+def get_all_build_configs(project_name: str):
+    logging.info(f"Fetching all BuildConfigs in project '{project_name}'")
+    output = run_oc_command(["oc", "get", "bc", "-n", project_name, "-o", "json"])
+    return json.loads(output).get("items", []) if output else []
 
 # Check if a build config matches the criteria
 def matches_criteria(bc: dict) -> bool:
@@ -31,87 +36,82 @@ def matches_criteria(bc: dict) -> bool:
     ref = git.get("ref", "")
 
     return (
-        context_dir == " and
-        uri == "t" and
-        ref == 
+        context_dir == "ingboot" and
+        uri == "ht" and
+        ref == "c"
     )
 
-# Extract required information from a BuildConfig
-def extract_buildconfig_info(bc: dict) -> dict:
-    metadata = bc.get("metadata", {})
-    spec = bc.get("spec", {})
-    output_to = spec.get("output", {}).get("to", {}).get("name", "")
-    context_dir = spec.get("source", {}).get("contextDir", "")
-    pull_secret = spec.get("strategy", {}).get("dockerStrategy", {}).get("pullSecret", {}).get("name", "")
-    secrets = [secret.get("secret", {}).get("name", "") for secret in spec.get("triggers", [])]
-
-    return {
-        "metadata_name": metadata.get("name", ""),
-        "push_secret": output_to,
-        "pull_secret": pull_secret,
-        "context_dir": context_dir,
-        "secrets": ", ".join(secrets),
+# Update a build config
+def update_build_config(project_name: str, build_config_name: str) -> None:
+    logging.info(f"Updating BuildConfig: {build_config_name} in project '{project_name}'")
+    patch_data = {
+        "spec": {
+            "strategy": {
+                "dockerStrategy": {
+                    "pullSecrets": [
+                        {"name": "as"}
+                    ]
+                }
+            },
+            "output": {
+                "pushSecret": {
+                    "name": "as"
+                }
+            },
+            "secrets": [
+                {"secret": {"name": "s"}}
+            ]
+        }
     }
 
-# Function to count and save matching build configs to CSV
-def count_and_save_matching_build_configs(projects: list, csv_file: str) -> None:
-    total_count = 0  # To count the total number of matching build configs
-    results = []  # List to store extracted info
-
-    for project_name in projects:
-        matching_count = 0  # To count matches within each project
-        build_configs = get_build_configs(project_name)
-        if build_configs:
-            for bc in build_configs.get("items", []):
-                if matches_criteria(bc):
-                    info = extract_buildconfig_info(bc)
-                    info["project_name"] = project_name
-                    results.append(info)
-                    matching_count += 1
-                    total_count += 1
-            logging.info(f"Found {matching_count} matching build configs in project {project_name}")
-        else:
-            logging.warning(f"No build configs found for project {project_name}")
-
-    # Save results to CSV
-    if results:
-        keys = results[0].keys()
-        with open(csv_file, "w", newline="") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=keys)
-            writer.writeheader()
-            writer.writerows(results)
-        logging.info(f"Saved {total_count} matching build configs to {csv_file}")
+    patch_data_json = json.dumps(patch_data)
+    command = [
+        "oc", "patch", "bc", build_config_name,
+        "-n", project_name,
+        "--type", "merge",
+        "-p", patch_data_json
+    ]
+    result = run_oc_command(command)
+    if result:
+        logging.info(f"Successfully updated BuildConfig: {build_config_name}")
     else:
-        logging.info("No matching build configs to save.")
+        logging.error(f"Failed to update BuildConfig: {build_config_name}")
 
-# Function to load projects dynamically (either from input or config)
-def load_projects(project_file: str = None, specific_projects: list = None) -> list:
-    # Load from a file if specified
-    if project_file:
-        with open(project_file, 'r') as file:
-            return [line.strip() for line in file if line.strip()]
-    # Use projects provided by the user
-    elif specific_projects:
-        return specific_projects
-    return []
+# Update multiple build configs in a namespace
+def update_multiple_build_configs(project_name: str, build_configs: list):
+    for build_config_name in build_configs:
+        bc = get_build_config(project_name, build_config_name)
+        if bc and matches_criteria(bc):
+            update_build_config(project_name, build_config_name)
+        else:
+            logging.warning(f"BuildConfig '{build_config_name}' does not match the criteria or was not found.")
 
-# Entry point with arguments for flexibility
+# Update all matching build configs in a namespace
+def update_all_build_configs_in_namespace(project_name: str):
+    build_configs = get_all_build_configs(project_name)
+    if not build_configs:
+        logging.warning(f"No BuildConfigs found in namespace '{project_name}'")
+        return
+
+    for bc in build_configs:
+        bc_name = bc.get("metadata", {}).get("name", "")
+        if matches_criteria(bc):
+            update_build_config(project_name, bc_name)
+        else:
+            logging.info(f"BuildConfig '{bc_name}' does not match the criteria and will not be updated.")
+
+# Entry point
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Count and save matching OpenShift BuildConfigs to a CSV.")
-    parser.add_argument('--projects', nargs='+', help="List of specific projects to update.")
-    parser.add_argument('--project-file', help="File containing a list of projects to process (one per line).")
-    parser.add_argument('--batch-size', type=int, default=5, help="Number of projects to process in a batch.")
-    parser.add_argument('--output-file', default="matching_buildconfigs.csv", help="CSV file to save results.")
+    parser = argparse.ArgumentParser(description="Update OpenShift BuildConfigs.")
+    parser.add_argument('--project', required=True, help="Project namespace.")
+    parser.add_argument('--build-configs', nargs='+', help="List of BuildConfig names to update.")
+    parser.add_argument('--update-all', action='store_true', help="Update all BuildConfigs in the namespace.")
     args = parser.parse_args()
 
-    # Load the projects either from a file or a provided list
-    projects = load_projects(args.project_file, args.projects)
-
-    if not projects:
-        logging.error("No projects provided. Use --projects or --project-file.")
+    # Update multiple BuildConfigs or all BuildConfigs in the namespace
+    if args.build_configs:
+        update_multiple_build_configs(args.project, args.build_configs)
+    elif args.update_all:
+        update_all_build_configs_in_namespace(args.project)
     else:
-        # Process in batches to avoid processing too many projects at once
-        batch_size = args.batch_size
-        for i in range(0, len(projects), batch_size):
-            project_batch = projects[i:i + batch_size]
-            count_and_save_matching_build_configs(project_batch, args.output_file)
+        logging.error("Please specify --build-configs to update specific BuildConfigs or --update-all to update all.")
