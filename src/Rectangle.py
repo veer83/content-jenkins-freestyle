@@ -1,5 +1,3 @@
-import re
-import json
 
 def filter_swagger_content(raw_content):
     """
