@@ -1,5 +1,3 @@
-import re
-
 def filter_swagger_content(raw_content):
     """
     Filters the Swagger content and extracts relevant details into a dictionary.
@@ -12,7 +10,7 @@ def filter_swagger_content(raw_content):
     dataclassification_code = ""
     paths_data = []
 
-    # Capture relevant Swagger lines
+    # Step 1: Capture relevant Swagger lines
     for line in raw_content.splitlines():
         if "openapi" in line or "swagger" in line:
             capture = True
@@ -23,19 +21,21 @@ def filter_swagger_content(raw_content):
 
     if filtered_content:
         try:
-            # Pre-clean the JSON content
+            # Step 2: Pre-clean the JSON content
             fixed_content = filtered_content.replace("'", '"')  # Replace single quotes with double quotes
             fixed_content = re.sub(r",\s*}", "}", fixed_content)  # Remove trailing commas before }
             fixed_content = re.sub(r",\s*]", "]", fixed_content)  # Remove trailing commas before ]
+            fixed_content = re.sub(r",\s*\n", "\n", fixed_content)  # Remove trailing commas at the end of lines
+            fixed_content = re.sub(r"(\w+):", r'"\1":', fixed_content)  # Add quotes around unquoted keys
 
-            # Parse the cleaned JSON
+            # Step 3: Parse the cleaned JSON
             swagger_json = json.loads(fixed_content)
 
-            # Extract basepath
+            # Step 4: Extract basepath
             if "servers" in swagger_json:
                 basepath = swagger_json["servers"][0].get("url", "")
 
-            # Extract info fields
+            # Step 5: Extract info fields
             if "info" in swagger_json:
                 info = swagger_json["info"]
                 info_data = {
@@ -46,7 +46,7 @@ def filter_swagger_content(raw_content):
                     "description": info.get("description", "")
                 }
 
-            # Extract x-dataclassification-code and paths
+            # Step 6: Extract x-dataclassification-code and paths
             for path, methods in swagger_json.get("paths", {}).items():
                 for method, details in methods.items():
                     paths_data.append({
