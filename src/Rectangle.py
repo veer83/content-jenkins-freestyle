@@ -6,12 +6,9 @@ def login(env, username, password):
 
     for line in login_output.splitlines():
         if "Logged into" in line and "successfully" in line:
-            # Typically line looks like:
-            # Logged into api-manage-ui.apicocbdbmtg001.sr.bmogc.net successfully
             parts = line.split()
             if len(parts) >= 4:
                 host = parts[2]
-                # Regex to match api-manage-ui.<org>.<env>.bmogc.net
                 match = re.search(r'api-manage-ui\.(?P<org>[^\.]+)\.(?P<env>[^\.]+)\.\.net', host)
                 if match:
                     org_found = match.group('org')
