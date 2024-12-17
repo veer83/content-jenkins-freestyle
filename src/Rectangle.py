@@ -1,43 +1,35 @@
-def filter_swagger_content(raw_content):
-    swagger_lines = []
-    capture = False
-    paths_data = []
+def download_swagger(env, catalog, product_list, space, org):
+    for product in product_list.get("results", []):
+        created_date = product.get("created_at", "N/A")
+        updated_date = product.get("updated_at", "N/A")
+        for plan in product.get("plans", []):
+            for api in plan.get("apis", []):
+                name, version = api.get("name"), api.get("version")
+                if name and version:
+                    logging.info(f"Processing API: {name} with version: {version} under product: {product.get('name')} and plan: {plan.get('name')}")
+                    
+                    # Get Swagger content
+                    get_swagger_command = [
+                        GET_SWAGGER_SCRIPT, env, f"{name}:{version}", catalog, OUTPUT_DIR
+                    ]
+                    result = run_command(
+                        get_swagger_command,
+                        f"Swagger successfully saved to {OUTPUT_DIR}",
+                        f"Error downloading Swagger for {name}:{version}",
+                        capture_output=True
+                    )
 
-    # Capture valid Swagger lines
-    for line in raw_content.splitlines():
-        if "openapi" in line or "swagger" in line:
-            capture = True
-        if capture:
-            swagger_lines.append(line)
-
-    if not swagger_lines:
-        return None, "", {}, []
-
-    try:
-        fixed_content = "\n".join(swagger_lines)
-        swagger_json = json.loads(fixed_content)
-
-        # Extract basepath
-        basepath = ""
-        if "servers" in swagger_json:
-            basepath = swagger_json["servers"][0].get("url", "")
-        elif "basePath" in swagger_json:
-            basepath = swagger_json["basePath"]
-
-        # Extract info data
-        info_data = swagger_json.get("info", {})
-        
-        # Extract paths data
-        for path, methods in swagger_json.get("paths", {}).items():
-            for method, details in methods.items():
-                paths_data.append({
-                    "path": path,
-                    "verb": method.upper(),
-                    "dataclassification_code": details.get("x-dataclassification-code", "N/A")
-                })
-
-        return swagger_json, basepath, info_data, paths_data
-
-    except json.JSONDecodeError as e:
-        logging.error(f"JSON parsing error: {e}")
-        return None, "", {}, []
+                    # Proper unpacking of return values
+                    swagger_content, basepath, info_data, paths_data = filter_swagger_content(result.stdout)
+                    
+                    if swagger_content:
+                        swagger_file_path = save_swagger_file(name, version, swagger_content)
+                        if swagger_file_path:
+                            push_to_database(
+                                product, plan.get("name"), name, version, swagger_content,
+                                basepath, env, space, org, created_date, updated_date, info_data, paths_data
+                            )
+                    else:
+                        logging.warning(f"No relevant Swagger content found for {name}:{version}")
+                else:
+                    logging.warning(f"Skipping API with missing name or version: {api}")
