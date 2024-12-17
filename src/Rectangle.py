@@ -1,25 +1,55 @@
-def login(env, username, password):
-    logger.debug("Attempting login...")
-    login_command = ["sudo", LOGIN_SCRIPT, env, username, password]
-    result = run_command(login_command, "Login successful", "Error during login", capture_output=True)
-    login_output = result.stdout.strip()
+def list_products(env, catalog, space):
+    command = [
+        "sudo",
+        LIST_PRODUCTS_SCRIPT,
+        "--server", env,
+        "--catalog", catalog,
+        "--space", space,
+        "--output", OUTPUT_DIR
+    ]
+    
+    run_command(
+        command,
+        "Product list downloaded successfully.",
+        "Error downloading product list"
+    )
 
-    for line in login_output.splitlines():
-        if "Logged into" in line and "successfully" in line:
-            parts = line.split()
-            if len(parts) >= 4:
-                host = parts[2]
-                match = re.search(r'api-manage-ui\.(?P<org>[^\.]+)\.(?P<env>[^\.]+)\.\.net', host)
-                if match:
-                    org_found = match.group('org')
-                    env_found = match.group('env')
-                    # We don't get space from here, so we'll rely on config for space.
-                    # Just return the env and org found. We'll assume space is already known from config.
-                    return env_found, None, org_found
 
-    logger.error("Unable to extract env, space, and org from login output.")
-    sys.exit(1)
+def process_product(product, env, space, org, catalog):
 
+    product_name = product.get('name')
+    product_version = product.get('version')
+    logger.info(f"Processing product: {product_name}")
+
+    swagger_command = ["sudo", GET_SWAGGER_SCRIPT, env, f"{product_name}:{product_version}", catalog, OUTPUT_DIR]
+    try:
+        result = run_command(swagger_command, "Swagger downloaded successfully", "Error downloading Swagger", capture_output=True)
+    except CommandError:
+        logger.error(f"Skipping product {product_name} due to fetch error.")
+        return
+
+    swagger_json, basepath, info_data, paths_data = filter_swagger_content(result.stdout)
+    if swagger_json:
+        created_date = product.get("created_date", "")
+        updated_date = product.get("updated_date", "")
+        push_to_database(
+            product,
+            swagger_json,
+            basepath,
+            env,
+            space,
+            org,
+            created_date,
+            updated_date,
+            info_data,
+            paths_data
+        )
+    else:
+        logger.warning(f"No valid swagger extracted for product {product_name}, skipping.")
+
+def process_products(product_list, env, space, org, catalog):
+    for product in product_list.get("results", []):
+        process_product(product, env, space, org, catalog)
 
 def main():
     try:
@@ -40,7 +70,7 @@ def main():
         if space_found is None:
             space_found = space
 
-        # Download product list
+        # Download product list with correct arguments
         list_products(env_found, catalog, space_found)
 
         # Load product list from downloaded YAML
