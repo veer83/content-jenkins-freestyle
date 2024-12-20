@@ -1,0 +1,63 @@
+# azure-pipelines.yaml
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  ARTIFACTORY_URL: 'https://artifactory.example.com/artifactory'
+  APIC_EXE_PATH: 'repo-path-to-apic-cli'
+  OUTPUT_DIR: '/tmp/output'
+  LOG_DIR: '/tmp/logs'
+  PYTHON_REQUIREMENTS: '/project/ApicScripts/requirements.txt'
+  IMAGE_NAME: ''
+  IMAGE_TAG: ''
+  OPENSHIFT_SERVER: 'your-openshift-cluster-url'
+  OPENSHIFT_TOKEN: '$(openshift_service_token)'
+  OPENSHIFT_NAMESPACE: ''
+
+steps:
+- task: UsePythonVersion@0
+  displayName: 'Use Python 3.9'
+  inputs:
+    versionSpec: '3.9'
+    addToPath: true
+
+- script: |
+    echo "Installing APIC CLI..."
+    curl -u $ARTIFACTORY_USER:$ARTIFACTORY_PASSWORD -O $(ARTIFACTORY_URL)/$(APIC_EXE_PATH)/apic-cli.tar.gz
+    tar -xzvf apic-cli.tar.gz
+    chmod +x apic-cli
+    mv apic-cli /usr/local/bin/apic-cli
+  displayName: 'Install APIC CLI'
+
+- script: |
+    echo "Setting up Python environment..."
+    pip install --upgrade pip setuptools-rust
+    pip install -r $PYTHON_REQUIREMENTS
+  displayName: 'Install Python dependencies'
+
+- script: |
+    echo "Building Docker image..."
+    docker build -t $IMAGE_NAME:$IMAGE_TAG .
+  displayName: 'Build Docker Image'
+
+- script: |
+    echo "Pushing Docker image to Artifactory..."
+    docker login -u $ARTIFACTORY_USER -p $ARTIFACTORY_PASSWORD 
+    docker push /$IMAGE_NAME:$IMAGE_TAG
+  displayName: 'Push Docker Image to Artifactory'
+
+- script: |
+    echo "Deploying to OpenShift..."
+    oc login $OPENSHIFT_SERVER --token=$OPENSHIFT_TOKEN
+    oc project $OPENSHIFT_NAMESPACE
+    oc set image dc/$IMAGE_NAME $IMAGE_NAME=/$IMAGE_NAME:$IMAGE_TAG --namespace=$OPENSHIFT_NAMESPACE
+    oc rollout restart dc/$IMAGE_NAME
+  displayName: 'Deploy to OpenShift'
+
+- script: |
+    echo "Cleaning up Docker resources..."
+    docker system prune -f
+  displayName: 'Cleanup'
